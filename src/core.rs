@@ -26,6 +26,8 @@ use tokio_xmpp::{
 };
 use uuid::Uuid;
 use xmpp_parsers;
+use xmpp_parsers::hashes as xmpp_hashes;
+use xmpp_parsers::caps::{self, Caps};
 use xmpp_parsers::delay::Delay;
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::message::Message as XmppParsersMessage;
@@ -86,7 +88,11 @@ pub enum Event {
     Leave(Channel),
     Iq(Account, iq::Iq),
     Disco(Account),
-    PubSub(Account, PubSubEvent),
+    PubSub {
+        account: Account,
+        from: Option<Jid>,
+        event: PubSubEvent
+    },
     Presence(Account, presence::Presence),
     ReadPassword(Command),
     Win(String),
@@ -137,6 +143,7 @@ pub enum Mod {
     UI(mods::ui::UIMod),
     Mam(mods::mam::MamMod),
     Correction(mods::correction::CorrectionMod),
+    Omemo(mods::omemo::OmemoMod),
 }
 
 macro_rules! from_mod {
@@ -211,6 +218,7 @@ impl ModTrait for Mod {
             Mod::Mam(r#mod) => r#mod.init(aparte),
             Mod::Messages(r#mod) => r#mod.init(aparte),
             Mod::Correction(r#mod) => r#mod.init(aparte),
+            Mod::Omemo(r#mod) => r#mod.init(aparte),
         }
     }
 
@@ -226,6 +234,7 @@ impl ModTrait for Mod {
             Mod::Mam(r#mod) => r#mod.on_event(aparte, event),
             Mod::Messages(r#mod) => r#mod.on_event(aparte, event),
             Mod::Correction(r#mod) => r#mod.on_event(aparte, event),
+            Mod::Omemo(r#mod) => r#mod.on_event(aparte, event),
         }
     }
 
@@ -253,6 +262,7 @@ impl ModTrait for Mod {
             Mod::Correction(r#mod) => {
                 r#mod.can_handle_xmpp_message(aparte, account, message, delay)
             }
+            Mod::Omemo(r#mod) => r#mod.can_handle_xmpp_message(aparte, account, message, delay),
         }
     }
 
@@ -274,6 +284,7 @@ impl ModTrait for Mod {
             Mod::Mam(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
             Mod::Messages(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
             Mod::Correction(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
+            Mod::Omemo(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
         }
     }
 }
@@ -291,6 +302,7 @@ impl fmt::Debug for Mod {
             Mod::Mam(_) => f.write_str("Mod::Mam"),
             Mod::Messages(_) => f.write_str("Mod::Messages"),
             Mod::Correction(_) => f.write_str("Mod::Correction"),
+            Mod::Omemo(_) => f.write_str("Mod::Omemo"),
         }
     }
 }
@@ -308,6 +320,7 @@ impl fmt::Display for Mod {
             Mod::Mam(r#mod) => r#mod.fmt(f),
             Mod::Messages(r#mod) => r#mod.fmt(f),
             Mod::Correction(r#mod) => r#mod.fmt(f),
+            Mod::Omemo(r#mod) => r#mod.fmt(f),
         }
     }
 }
@@ -799,19 +812,20 @@ impl Aparte {
             event_queue: Vec::new(),
             send_queue: VecDeque::new(),
             event_channel: None,
-            config: config,
+            config,
         };
 
         aparte.add_mod(Mod::Completion(mods::completion::CompletionMod::new()));
         aparte.add_mod(Mod::Carbons(mods::carbons::CarbonsMod::new()));
         aparte.add_mod(Mod::Contact(mods::contact::ContactMod::new()));
         aparte.add_mod(Mod::Conversation(mods::conversation::ConversationMod::new()));
-        aparte.add_mod(Mod::Disco(mods::disco::DiscoMod::new()));
+        aparte.add_mod(Mod::Disco(mods::disco::DiscoMod::new("client", "console", "Aparté", "en")));
         aparte.add_mod(Mod::Bookmarks(mods::bookmarks::BookmarksMod::new()));
         aparte.add_mod(Mod::UI(mods::ui::UIMod::new()));
         aparte.add_mod(Mod::Mam(mods::mam::MamMod::new()));
         aparte.add_mod(Mod::Messages(mods::messages::MessagesMod::new()));
         aparte.add_mod(Mod::Correction(mods::correction::CorrectionMod::new()));
+        aparte.add_mod(Mod::Omemo(mods::omemo::OmemoMod::new()));
 
         aparte
     }
@@ -914,6 +928,12 @@ impl Aparte {
                 mods.insert(
                     TypeId::of::<mods::correction::CorrectionMod>(),
                     RefCell::new(Mod::Correction(r#mod)),
+                );
+            }
+            Mod::Omemo(r#mod) => {
+                mods.insert(
+                    TypeId::of::<mods::omemo::OmemoMod>(),
+                    RefCell::new(Mod::Omemo(r#mod)),
                 );
             }
         }
@@ -1222,6 +1242,12 @@ impl Aparte {
                     self.log(format!("Connected as {}", account));
                     let mut presence = Presence::new(PresenceType::None);
                     presence.show = Some(PresenceShow::Chat);
+
+                    let disco = self.get_mod::<mods::disco::DiscoMod>().get_disco();
+                    let disco = caps::compute_disco(&disco);
+                    let verification_string = caps::hash_caps(&disco, xmpp_hashes::Algo::Blake2b_512).unwrap();
+                    let caps = Caps::new("aparté", verification_string);
+                    presence.add_payload(caps);
 
                     self.send(&account, presence.into());
                 }
