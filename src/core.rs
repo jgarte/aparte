@@ -1027,7 +1027,9 @@ impl Aparte {
             loop {
                 tokio::select! {
                     event = event_rx.recv() => match event {
-                        Some(event) => self.handle_event(event),
+                        Some(event) => if let Err(_) = self.handle_event(event) {
+                            break;
+                        },
                         None => {
                             debug!("Broken event loop");
                             break;
@@ -1182,7 +1184,7 @@ impl Aparte {
         });
     }
 
-    pub fn handle_event(&mut self, event: Event) {
+    pub fn handle_event(&mut self, event: Event) -> Result<(), ()> {
         debug!("Event: {:?}", event);
         {
             let mods = self.mods.clone();
@@ -1276,10 +1278,12 @@ impl Aparte {
                 self.send(&channel.account, presence.into());
             }
             Event::Quit => {
-                return;
+                return Err(());
             }
             _ => {}
         }
+
+        Ok(())
     }
 
     fn handle_stanza(&mut self, account: Account, stanza: Element) {
