@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
+
 use xmpp_parsers::{muc, BareJid, Jid};
 
 use crate::account::Account;
